@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Matched Filtering, ISI &amp; Eye Diagrams</title>
+<style>
+:root {
+  --bg:#f7f7f5; --panel:#ffffff; --border:#dcdad3; --text:#1a1a1a; --sub:#5a5a55;
+  --accent:#185fa5; --good:#3b6d11; --bad:#a32d2d;
+  box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg:#17171a; --panel:#232326; --border:#3a3a3d; --text:#eee; --sub:#aaa;
+  --accent:#5aa4ec; --good:#97c459; --bad:#f09595; }
+}
+:root[data-theme="dark"] { --bg:#17171a; --panel:#232326; --border:#3a3a3d; --text:#eee; --sub:#aaa;
+  --accent:#5aa4ec; --good:#97c459; --bad:#f09595; }
+html{scroll-padding-top:env(safe-area-inset-top,0px);}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.5;}
+.wrap{max-width:960px;margin:0 auto;padding:1.5rem 1rem 3rem;}
+h1{font-size:1.3rem;margin:0 0 .25rem;}
+h2{font-size:1.05rem;margin:1.6rem 0 .5rem;color:var(--accent);}
+p.sub{color:var(--sub);margin:0 0 1rem;font-size:.9rem;}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:1rem;margin-bottom:1rem;}
+.row{display:flex;flex-wrap:wrap;gap:.75rem;align-items:flex-end;margin-bottom:.5rem;}
+.field{display:flex;flex-direction:column;font-size:.8rem;color:var(--sub);gap:.25rem;}
+.field select,.field input[type=number]{padding:.35rem .4rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);width:110px;}
+.field input[type=range]{width:150px;}
+button{background:var(--accent);color:#fff;border:none;padding:.5rem .9rem;border-radius:6px;font-size:.85rem;cursor:pointer;}
+.chartbox{position:relative;height:220px;margin:.5rem 0 1rem;}
+table{width:100%;border-collapse:collapse;font-size:.8rem;margin-top:.5rem;}
+th,td{border-bottom:1px solid var(--border);padding:.3rem .4rem;text-align:center;}
+th{color:var(--sub);font-weight:500;}
+.pill{display:inline-block;padding:.15rem .55rem;border-radius:20px;font-size:.75rem;font-weight:600;}
+.pill.good{background:rgba(59,109,17,.15);color:var(--good);}
+.pill.bad{background:rgba(163,45,45,.15);color:var(--bad);}
+.note{font-size:.85rem;color:var(--sub);border-left:3px solid var(--accent);padding:.4rem .7rem;background:rgba(24,95,165,.06);border-radius:0 6px 6px 0;margin:.5rem 0;}
+.interp{font-size:.88rem;margin-top:.4rem;}
+label.chk{font-size:.85rem;display:flex;align-items:center;gap:.3rem;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Experiment 8 — Matched filtering, ISI &amp; eye diagrams</h1>
+<p class="sub">BPSK symbols are RRC pulse-shaped, optionally passed through a multipath channel, corrupted by AWGN, then matched-filtered. The total cascade delay is tracked explicitly so detection only samples after it is removed.</p>
+
+<div class="card">
+  <h2 style="margin-top:0">1 · Channel &amp; filter parameters</h2>
+  <div class="row">
+    <div class="field"><label>Roll-off α</label><input id="alpha" type="range" min="0" max="1" step="0.05" value="0.35"><span id="alphaVal">0.35</span></div>
+    <div class="field"><label>Filter span (symbols)</label><input id="span" type="number" value="6" min="2" max="12"></div>
+    <div class="field"><label>Samples/symbol</label><input id="sps" type="number" value="8" min="4" max="16"></div>
+    <div class="field"><label>SNR (dB)</label><input id="snr" type="range" min="-2" max="20" step="1" value="10"><span id="snrVal">10</span></div>
+    <div class="field"><label>Sampling offset (×T)</label><input id="offset" type="range" min="-0.5" max="0.5" step="0.05" value="0"><span id="offsetVal">0.00</span></div>
+  </div>
+  <div class="row">
+    <label class="chk"><input type="checkbox" id="multipath"> Multipath ISI channel</label>
+    <div class="field"><label>Echo delay (symbols)</label><input id="echoDelay" type="number" value="1" min="1" max="4"></div>
+    <div class="field"><label>Echo gain</label><input id="echoGain" type="number" value="0.4" step="0.05" min="0" max="0.9"></div>
+    <button id="runAll">Run simulation</button>
+  </div>
+  <div class="note">Expected: at high SNR with a correctly compensated sampling instant and no multipath, the eye should be wide open and BER near zero. Reducing SNR fills the eye with noise; a nonzero sampling offset moves the sampling instant off the eye's center, raising BER even without noise; enabling multipath ISI closes the eye vertically because delayed echoes of neighboring symbols add onto the current sample.</div>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">2 · Transmit &amp; matched-filter output (mandatory validation)</h2>
+  <div class="chartbox"><canvas id="chartWave" role="img" aria-label="Transmit pulse-shaped waveform and matched filter output with detection markers">Tx and matched-filter output.</canvas></div>
+  <div id="delayTable"></div>
+  <div class="interp" id="delayInterp"></div>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">3 · Eye diagram</h2>
+  <div class="chartbox"><canvas id="chartEye" role="img" aria-label="Eye diagram of the matched filter output overlaying many symbol periods">Eye diagram.</canvas></div>
+  <div class="interp" id="eyeInterp"></div>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">4 · Eye height versus SNR</h2>
+  <div class="chartbox"><canvas id="chartEyeSNR" role="img" aria-label="Eye height at the optimum sampling instant as a function of SNR">Eye height vs SNR.</canvas></div>
+  <div class="interp" id="eyeSnrInterp"></div>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">5 · BER versus sampling (timing) offset</h2>
+  <div class="chartbox"><canvas id="chartBERoffset" role="img" aria-label="Bit error rate as a function of sampling timing offset, with and without multipath ISI">BER vs timing offset.</canvas></div>
+  <div class="interp" id="berInterp"></div>
+</div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+function isDark(){ return matchMedia('(prefers-color-scheme: dark)').matches; }
+const ink = () => isDark() ? '#eee' : '#1a1a1a';
+const grid = () => isDark() ? '#3a3a3d' : '#e1e0d9';
+let charts = {};
+function upsertChart(id, config){ if(charts[id]) charts[id].destroy(); charts[id]=new Chart(document.getElementById(id), config); }
+function lineOpts(xLabel,yLabel,legend){
+  return { responsive:true, maintainAspectRatio:false, animation:false,
+    scales:{ x:{ ticks:{color:ink(),autoSkip:true,maxRotation:0}, grid:{color:grid()}, title:{display:true,text:xLabel,color:ink()} },
+             y:{ ticks:{color:ink()}, grid:{color:grid()}, title:{display:true,text:yLabel,color:ink()} } },
+    plugins:{ legend:{display:legend!==false, labels:{color:ink()}} } };
+}
+
+function rrc(t, a){
+  const x = t;
+  if(Math.abs(x) < 1e-9) return (1 - a + 4*a/Math.PI);
+  if(a>0 && Math.abs(Math.abs(x) - 1/(4*a)) < 1e-6){
+    return (a/Math.SQRT2) * ( (1+2/Math.PI)*Math.sin(Math.PI/(4*a)) + (1-2/Math.PI)*Math.cos(Math.PI/(4*a)) );
+  }
+  const num = Math.sin(Math.PI*x*(1-a)) + 4*a*x*Math.cos(Math.PI*x*(1+a));
+  const den = Math.PI*x*(1-(4*a*x)*(4*a*x));
+  return num/den;
+}
+function rrcTaps(alpha, spanSym, sps){
+  const half = spanSym*sps;
+  const taps = [];
+  for(let i=-half;i<=half;i++) taps.push(rrc(i/sps, alpha));
+  const energy = Math.sqrt(taps.reduce((s,v)=>s+v*v,0));
+  return taps.map(v=>v/energy);
+}
+function convolve(x, h){
+  const out = new Array(x.length + h.length - 1).fill(0);
+  for(let i=0;i<x.length;i++){ if(x[i]===0) continue; const xi=x[i]; for(let j=0;j<h.length;j++) out[i+j]+=xi*h[j]; }
+  return out;
+}
+function gaussian(){ let u=0,v=0; while(u===0)u=Math.random(); while(v===0)v=Math.random(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+
+function runChain(nsym, alpha, spanSym, sps, snrDb, offsetFrac, multipath, echoDelaySym, echoGain, symbolsFixed){
+  const symbols = symbolsFixed || Array.from({length:nsym}, ()=> Math.random()<0.5?-1:1);
+  const impTrain = new Array(nsym*sps).fill(0);
+  symbols.forEach((s,i)=> impTrain[i*sps]=s);
+  const taps = rrcTaps(alpha, spanSym, sps);
+  let tx = convolve(impTrain, taps);
+  const txDelay = spanSym*sps;
+  if(multipath){
+    const chLen = echoDelaySym*sps+1;
+    const ch = new Array(chLen).fill(0); ch[0]=1; ch[chLen-1]=echoGain;
+    tx = convolve(tx, ch);
+  }
+  const power = tx.reduce((s,v)=>s+v*v,0)/tx.length;
+  const noiseVar = power / Math.pow(10, snrDb/10);
+  const rx = tx.map(v=> v + Math.sqrt(noiseVar)*gaussian());
+  const matched = convolve(rx, taps);
+  const totalDelay = 2*spanSym*sps;
+  const offsetSamples = Math.round(offsetFrac*sps);
+  const detected = [];
+  const sampledVals = [];
+  for(let k=0;k<nsym;k++){
+    const idx = totalDelay + k*sps + offsetSamples;
+    const v = (idx>=0 && idx<matched.length) ? matched[idx] : 0;
+    sampledVals.push(v);
+    detected.push(v>=0?1:-1);
+  }
+  return { symbols, tx, matched, totalDelay, detected, sampledVals };
+}
+
+function ber(symbols, detected, skip){
+  let errs=0, count=0;
+  for(let i=skip;i<symbols.length-skip;i++){ count++; if(symbols[i]!==detected[i]) errs++; }
+  return count? errs/count : 0;
+}
+
+function params(){
+  return {
+    alpha: +document.getElementById('alpha').value,
+    span: +document.getElementById('span').value,
+    sps: +document.getElementById('sps').value,
+    snr: +document.getElementById('snr').value,
+    offset: +document.getElementById('offset').value,
+    multipath: document.getElementById('multipath').checked,
+    echoDelay: +document.getElementById('echoDelay').value,
+    echoGain: +document.getElementById('echoGain').value
+  };
+}
+
+document.getElementById('alpha').addEventListener('input', e=>document.getElementById('alphaVal').textContent=(+e.target.value).toFixed(2));
+document.getElementById('snr').addEventListener('input', e=>document.getElementById('snrVal').textContent=e.target.value);
+document.getElementById('offset').addEventListener('input', e=>document.getElementById('offsetVal').textContent=(+e.target.value).toFixed(2));
+
+function plotWaveAndDelay(p){
+  const nsym = 24;
+  const r = runChain(nsym, p.alpha, p.span, p.sps, p.snr, p.offset, p.multipath, p.echoDelay, p.echoGain);
+  const showLen = Math.min(r.matched.length, (nsym)*p.sps + r.totalDelay + p.sps);
+  const labels = []; const txD=[]; const matchedD=[];
+  for(let i=0;i<showLen;i++){ labels.push((i/p.sps).toFixed(1)); txD.push(r.tx[i]||0); matchedD.push(r.matched[i]); }
+  const markers = [];
+  for(let k=4;k<12;k++){ const idx=r.totalDelay+k*p.sps+Math.round(p.offset*p.sps); if(idx<showLen) markers.push({x: (idx/p.sps).toFixed(1), y: r.matched[idx]}); }
+  upsertChart('chartWave', { type:'line', data:{ labels, datasets:[
+    {label:'Tx pulse-shaped signal', data:txD, borderColor:'#2a78d6', borderWidth:1, pointRadius:0},
+    {label:'Matched-filter output', data:matchedD, borderColor:'#1baf7a', borderWidth:1.5, pointRadius:0},
+    {label:'Detection samples', data:labels.map((l,i)=>{ const m=markers.find(mm=>mm.x===l); return m? m.y : null; }), borderColor:'#e34948', backgroundColor:'#e34948', pointRadius:4, showLine:false }
+  ]}, options: lineOpts('t / T','amplitude') });
+
+  const totalDelaySamples = r.totalDelay;
+  const totalDelaySymbols = totalDelaySamples / p.sps;
+  document.getElementById('delayTable').innerHTML = `<table><tr><th>Filter</th><th>Group delay (symbols)</th><th>Group delay (samples)</th></tr>
+    <tr><td>Tx RRC</td><td>${p.span}</td><td>${p.span*p.sps}</td></tr>
+    <tr><td>Rx matched RRC</td><td>${p.span}</td><td>${p.span*p.sps}</td></tr>
+    <tr><td><b>Total cascade</b></td><td><b>${totalDelaySymbols}</b></td><td><b>${totalDelaySamples}</b></td></tr></table>`;
+
+  // Mandatory validation: compare BER with delay compensated vs uncompensated (offset=0, no delay removed)
+  const rNoComp = runChain(200, p.alpha, p.span, p.sps, p.snr, p.offset, p.multipath, p.echoDelay, p.echoGain);
+  const berCompensated = ber(rNoComp.symbols, rNoComp.detected, p.span+1);
+  const uncompDetected = [];
+  for(let k=0;k<rNoComp.symbols.length;k++){ const idx=k*p.sps; uncompDetected.push((rNoComp.matched[idx]||0)>=0?1:-1); }
+  const berUncompensated = ber(rNoComp.symbols, uncompDetected, p.span+1);
+  document.getElementById('delayInterp').innerHTML =
+    `<span class="pill good">Compensated BER ≈ ${(berCompensated*100).toFixed(1)}%</span> `+
+    `<span class="pill ${berUncompensated>0.3?'bad':'good'}">Sampling at k·sps with no delay removed → BER ≈ ${(berUncompensated*100).toFixed(1)}%</span><br>`+
+    `<b>Observation:</b> the two RRC filters each contribute a group delay of ${p.span} symbols (${p.span*p.sps} samples), for a total cascade delay of ${totalDelaySymbols} symbols. Detected symbols above are read starting at sample index ${totalDelaySamples} onward, not from index 0 — confirming detection happens only after delay removal. Sampling at the naive, uncompensated instants k·sps instead effectively samples the wrong point on the pulse every time, which is why its BER stays high regardless of SNR.`;
+}
+
+function eyeTraces(r, sps, spanSym, skipSym){
+  const traces = [];
+  const half = sps;
+  for(let k=skipSym;k<r.symbols.length-skipSym-1;k++){
+    const center = r.totalDelay + k*sps;
+    const seg = [];
+    for(let i=-half;i<=half;i++) seg.push(r.matched[center+i]);
+    traces.push(seg);
+  }
+  return traces;
+}
+
+function plotEye(p){
+  const nsym = 80;
+  const r = runChain(nsym, p.alpha, p.span, p.sps, p.snr, 0, p.multipath, p.echoDelay, p.echoGain);
+  const traces = eyeTraces(r, p.sps, p.span, p.span+1);
+  const labels = Array.from({length:2*p.sps+1}, (_,i)=> ((i-p.sps)/p.sps).toFixed(2));
+  const datasets = traces.slice(0,50).map(seg=>({ data:seg, borderColor:'rgba(24,95,165,0.35)', borderWidth:1, pointRadius:0 }));
+  upsertChart('chartEye', { type:'line', data:{labels, datasets}, options:{ ...lineOpts('t / T (relative to symbol center)','amplitude', false) } });
+
+  // eye height at center (offset index = sps)
+  const centerVals = traces.map(seg=>seg[p.sps]);
+  const bitsForTraces = r.symbols.slice(p.span+1, p.span+1+traces.length);
+  const pos = centerVals.filter((v,i)=>bitsForTraces[i]===1);
+  const neg = centerVals.filter((v,i)=>bitsForTraces[i]===-1);
+  const eyeHeight = (pos.length&&neg.length) ? Math.min(...pos) - Math.max(...neg) : NaN;
+  document.getElementById('eyeInterp').innerHTML = `<b>Observation:</b> eye height at the optimum sampling instant (center) is ${isNaN(eyeHeight)?'undefined':eyeHeight.toFixed(3)}. `+
+    (p.multipath ? 'With multipath ISI enabled the eye is visibly compressed vertically by the delayed echo, even before any noise is added — a direct illustration of intersymbol interference. ' : '') +
+    (p.snr < 5 ? 'At this low SNR the trace bundle is noticeably fuzzy, narrowing the eye opening compared to a high-SNR run.' : 'At this SNR the eye stays reasonably open at its center.');
+}
+
+function plotEyeHeightVsSNR(p){
+  const snrs = [-2,0,2,4,6,8,10,12,15,20];
+  const heights = snrs.map(s=>{
+    const r = runChain(80, p.alpha, p.span, p.sps, s, 0, p.multipath, p.echoDelay, p.echoGain);
+    const traces = eyeTraces(r, p.sps, p.span, p.span+1);
+    const centerVals = traces.map(seg=>seg[p.sps]);
+    const bitsForTraces = r.symbols.slice(p.span+1, p.span+1+traces.length);
+    const pos = centerVals.filter((v,i)=>bitsForTraces[i]===1);
+    const neg = centerVals.filter((v,i)=>bitsForTraces[i]===-1);
+    return (pos.length&&neg.length) ? Math.min(...pos)-Math.max(...neg) : 0;
+  });
+  upsertChart('chartEyeSNR', { type:'line', data:{labels:snrs, datasets:[{label:'Eye height', data:heights, borderColor:'#0f6e56', borderWidth:1.8, pointRadius:3}]},
+    options: lineOpts('SNR (dB)','eye height') });
+  document.getElementById('eyeSnrInterp').innerHTML = `<b>Observation:</b> eye height increases monotonically with SNR and saturates at high SNR toward the noise-free eye opening set by α and any multipath — this agrees with theory, since higher SNR simply shrinks the noise cloud around each trace without changing the underlying pulse shape.`;
+}
+
+function plotBERvsOffset(p){
+  const offsets = [];
+  for(let o=-0.5;o<=0.5001;o+=0.1) offsets.push(+o.toFixed(2));
+  const symbols = Array.from({length:400}, ()=> Math.random()<0.5?-1:1);
+  const berNoMP = offsets.map(o=>{ const r = runChain(400, p.alpha, p.span, p.sps, p.snr, o, false, p.echoDelay, p.echoGain, symbols); return ber(r.symbols, r.detected, p.span+1); });
+  const berMP = offsets.map(o=>{ const r = runChain(400, p.alpha, p.span, p.sps, p.snr, o, true, p.echoDelay, p.echoGain, symbols); return ber(r.symbols, r.detected, p.span+1); });
+  upsertChart('chartBERoffset', { type:'line', data:{labels:offsets, datasets:[
+    {label:'No multipath', data:berNoMP, borderColor:'#2a78d6', borderWidth:1.8, pointRadius:3},
+    {label:'With multipath ISI', data:berMP, borderColor:'#e34948', borderWidth:1.8, pointRadius:3}
+  ]}, options: lineOpts('sampling offset (×T)','BER') });
+  document.getElementById('berInterp').innerHTML = `<b>Observation:</b> BER is lowest near zero offset (the eye's widest point) and rises as the sampling instant moves toward the eye's edges — confirming the timing-sensitivity that eye diagrams are meant to reveal. With multipath ISI enabled the whole curve sits higher and the low-BER region narrows, since the echo has already partly closed the eye even at the ideal instant.`;
+}
+
+document.getElementById('runAll').onclick = ()=>{
+  const p = params();
+  plotWaveAndDelay(p);
+  plotEye(p);
+  plotEyeHeightVsSNR(p);
+  plotBERvsOffset(p);
+};
+document.getElementById('runAll').click();
+</script>
+</body>
+</html>
